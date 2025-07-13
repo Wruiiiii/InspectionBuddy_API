@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: dacontactsapi
+    env: python
+#    buildCommand: ""
+#    startCommand: python app.py
+#    envVars:
+#      - key: FLASK_ENV
+#        value: production
+
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "gunicorn --bind 0.0.0.0:10000 app:app"
+    envVars:
+      - key: FLASK_ENV
+        value: production
