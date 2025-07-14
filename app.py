@@ -6,11 +6,10 @@ from flask_cors import CORS
 import requests
 from sqlalchemy import text
 from database import SessionLocal # This is for the Historical Docs feature
-from bs4 import BeautifulSoup # Added for web scraping
-from urllib.parse import urljoin # Added for web scraping
+from bs4 import BeautifulSoup
+from urllib.parse import urljoin
 
 # --- App Initialization ---
-# Initialize the Flask app and CORS once at the top.
 app = Flask(__name__)
 CORS(app)
 logging.basicConfig(level=logging.INFO)
@@ -19,6 +18,7 @@ logging.basicConfig(level=logging.INFO)
 # --- Endpoint 1: DA Contacts ---
 @app.route('/contacts', methods=['GET'])
 def get_contacts():
+    # ... (existing contact logic is fine) ...
     logging.info("Request received for /contacts")
     try:
         con = sqlite3.connect('contact_info.db')
@@ -26,13 +26,7 @@ def get_contacts():
         cur.execute("SELECT * FROM contact")
         rows = cur.fetchall()
         con.close()
-        
-        contacts = []
-        for row in rows:
-            contacts.append({
-                'County': row[0], 'Name': row[1], 'Address': row[2],
-                'Phone': row[3], 'Fax': row[4], 'Website': row[5],
-            })
+        contacts = [{'County': r[0], 'Name': r[1], 'Address': r[2], 'Phone': r[3], 'Fax': r[4], 'Website': r[5]} for r in rows]
         return jsonify(contacts)
     except Exception as e:
         logging.error(f"Error in /contacts: {e}")
@@ -42,38 +36,23 @@ def get_contacts():
 # --- Endpoint 2: FDA Enforcement ---
 @app.route("/fda-enforcement", methods=['POST'])
 def search_fda_enforcement():
+    # ... (existing enforcement logic is fine) ...
     logging.info("Request received for /fda-enforcement")
     data = request.get_json()
-    
-    # --- This section is now complete ---
     product_description = data.get('productDescription', '')
     recalling_firm = data.get('recallingFirm', '')
     recall_number = data.get('recallNumber', '')
     recall_class = data.get('recallClass', '')
-    # --- End of complete section ---
-    
     apikey = os.getenv('FDA_API_KEY')
-    if not apikey:
-        return jsonify({"error": "API key is missing"}), 500
-    
+    if not apikey: return jsonify({"error": "API key is missing"}), 500
     query_params = []
-    if product_description:
-        query_params.append(f'product_description:"{product_description}"')
-    if recalling_firm:
-        query_params.append(f'recalling_firm:"{recalling_firm}"')
-    # Add the new parameters to the query
-    if recall_number:
-        query_params.append(f'recall_number:"{recall_number}"')
-    if recall_class:
-        query_params.append(f'classification:"{recall_class}"')
-
-    # Ensure at least one search term is present
-    if not query_params:
-        return jsonify({"error": "At least one search field is required"}), 400
-    
+    if product_description: query_params.append(f'product_description:"{product_description}"')
+    if recalling_firm: query_params.append(f'recalling_firm:"{recalling_firm}"')
+    if recall_number: query_params.append(f'recall_number:"{recall_number}"')
+    if recall_class: query_params.append(f'classification:"{recall_class}"')
+    if not query_params: return jsonify({"error": "At least one search field is required"}), 400
     query = ' AND '.join(query_params)
     url = f'https://api.fda.gov/device/enforcement.json?api_key={apikey}&search={query}&limit=100'
-
     try:
         response = requests.get(url)
         response.raise_for_status()
@@ -83,78 +62,82 @@ def search_fda_enforcement():
         return jsonify({"error": "Failed to fetch data from the API"}), 500
 
 
-# --- Endpoint 3: Warning Letters (Now with scraping logic) ---
+# --- Endpoint 3: Warning Letters ---
 @app.route("/warning_letters", methods=['POST'])
 def search_warning_letters():
+    # ... (existing warning letter logic is fine) ...
     logging.info("Request received for /warning_letters")
     data = request.get_json()
     firm_name = data.get('firmName', '')
-
-    if not firm_name:
-        return jsonify({"error": "Firm name is required"}), 400
-
+    if not firm_name: return jsonify({"error": "Firm name is required"}), 400
     try:
-        # Construct the search URL for the FDA website
-        search_url = f"https://www.fda.gov/inspections-compliance-enforcement-and-criminal-investigations/compliance-actions-and-activities/warning-letters?search_api_views_fulltext={firm_name}"
-        
-        # Make the request to the FDA website
+        search_url = f"https://www.fda.gov/inspections-compliance-enforcement-and-criminal-investigations/compliance-actions-and-activities/warning-letters?search_api_views_fulltext={firm_name.replace(' ', '+')}"
         response = requests.get(search_url, headers={'User-Agent': 'Mozilla/5.0'})
         response.raise_for_status()
-
-        # Parse the HTML content
         soup = BeautifulSoup(response.content, 'html.parser')
-        
         results = []
-        # Find all table rows in the search results
         for row in soup.select('table.views-table tbody tr'):
             cells = row.find_all('td')
             if len(cells) >= 3:
-                # Extract the data from the cells
-                company_name = cells[0].get_text(strip=True)
-                issuing_office = cells[1].get_text(strip=True)
-                posted_date = cells[2].get_text(strip=True)
-                
-                # Find the link to the warning letter PDF
-                link_tag = cells[0].find('a')
-                letter_url = ""
-                if link_tag and link_tag.has_attr('href'):
-                    letter_url = urljoin(search_url, link_tag['href'])
-
-                # Assemble the result dictionary to match the Swift model
-                # Note: Not all fields are available from the search results page.
-                # We use placeholder or derived values where necessary.
-                result = {
-                    "LegalName": company_name,
-                    "ActionTakenDate": posted_date,
-                    "ActionType": "Warning Letter",
-                    "State": "N/A", # State is not provided in search results
-                    "CaseInjunctionID": letter_url, # Use URL as a unique ID
-                    "warning_letter_url": letter_url
-                }
-                results.append(result)
-
+                company_cell, _, posted_date_cell = cells[0], cells[1], cells[2]
+                legal_name = company_cell.get_text(strip=True)
+                link_tag = company_cell.find('a')
+                letter_url = urljoin(search_url, link_tag['href']) if link_tag else ""
+                results.append({"LegalName": legal_name, "ActionTakenDate": posted_date_cell.get_text(strip=True), "ActionType": "Warning Letter", "State": "N/A", "CaseInjunctionID": letter_url, "warning_letter_url": letter_url})
         return jsonify(results)
-
-    except requests.RequestException as e:
-        logging.error(f"Error scraping FDA Warning Letters: {e}")
-        return jsonify({"error": "Failed to fetch data from FDA website"}), 500
     except Exception as e:
-        logging.error(f"An unexpected error occurred during scraping: {e}")
+        logging.error(f"Error scraping FDA Warning Letters: {e}")
         return jsonify({"error": "An internal error occurred"}), 500
 
+# --- NEW Endpoint 4: MAUDE Adverse Events ---
+@app.route("/maude", methods=['POST'])
+def search_maude():
+    logging.info("Request received for /maude")
+    data = request.get_json()
+    
+    device_name = data.get('deviceName', '')
+    from_date = data.get('fromDate', '') # Expected format: YYYY-MM-DD
+    to_date = data.get('toDate', '')     # Expected format: YYYY-MM-DD
 
-# --- Endpoint 4: Historical Documents ---
+    if not all([device_name, from_date, to_date]):
+        return jsonify({"error": "Device name and date range are required"}), 400
+
+    apikey = os.getenv('FDA_API_KEY')
+    if not apikey:
+        return jsonify({"error": "API key is missing"}), 500
+
+    # Format dates for the FDA API query
+    from_date_formatted = from_date.replace('-', '')
+    to_date_formatted = to_date.replace('-', '')
+
+    # Construct the search query
+    query_params = [
+        f'device.generic_name:"{device_name}"',
+        f'date_of_event:[{from_date_formatted}+TO+{to_date_formatted}]'
+    ]
+    query = ' AND '.join(query_params)
+    
+    url = f"https://api.fda.gov/device/event.json?api_key={apikey}&search={query}&limit=100"
+    
+    logging.info(f"Querying MAUDE API: {url}")
+
+    try:
+        response = requests.get(url)
+        response.raise_for_status()
+        return jsonify(response.json())
+    except requests.RequestException as e:
+        logging.error(f"Error fetching data from MAUDE API: {e}")
+        return jsonify({"error": "Failed to fetch data from the MAUDE API"}), 500
+
+
+# --- Endpoint 5: Historical Documents ---
 @app.route("/historical-documents/search", methods=['GET'])
 def search_historical_documents():
+    # ... (existing historical docs logic is fine) ...
     logging.info("Request received for /historical-documents/search")
-    # This logic is taken from the app.py file you provided for this feature.
-    # It uses SQLAlchemy and a separate database session.
     query = request.args.get("query", "").strip()
-    # ... (Add the full logic from your historical docs app.py here) ...
-    
     session = SessionLocal()
     try:
-        # Simplified example of the query logic
         sql = text("SELECT * FROM historical_documents WHERE text LIKE :query LIMIT 20")
         results = session.execute(sql, {"query": f"%{query}%"}).fetchall()
         result_dicts = [dict(row._mapping) for row in results]
@@ -167,8 +150,6 @@ def search_historical_documents():
 
 
 # --- Server Execution ---
-# This part is for running the app locally.
-# Render will use the 'gunicorn' command from your render.yaml instead.
 if __name__ == "__main__":
     app.run(host='0.0.0.0', port=5001, debug=True)
 
